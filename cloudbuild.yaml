@@ -4,3 +4,5 @@ steps:
 
     - name: 'gcr.io/cloud-builders/npm'
       args: ['start']
+
+timeout: '5s'
