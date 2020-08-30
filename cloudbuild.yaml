@@ -1,79 +1,86 @@
 steps:
-    - name: "gcr.io/cloud-builders/gcloud"
+    - id: Generate unique service name
+      name: 'gcr.io/cloud-builders/gcloud:$_CLOUDSDK_VERSION'
+      entrypoint: '/bin/bash'
       args:
-        [
-          "beta",
-          "compute",
-          "--project=automatonerv0-220316",
-          "instances",
-          "create",
-          "automatoner-update-machine-$BRANCH_NAME",
-          "--zone=europe-west4-a",
-          "--machine-type=custom-2-4096",
-          "--subnet=default",
-          "--network-tier=PREMIUM",
-          "--maintenance-policy=MIGRATE",
-          "--service-account=457497300349-compute@developer.gserviceaccount.com",
-          "--scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append",
-          "--image=automatoner-base-image",
-          "--image-project=automatonerv0-220316",
-          "--boot-disk-size=10GB",
-          "--boot-disk-type=pd-standard",
-        ]
-    - name: "ubuntu"
-      args: ["sleep", "10"]
-    - name: "gcr.io/cloud-builders/gcloud"
+      - '-c'
+      - |
+        random-string() {
+            cat /dev/urandom | LC_CTYPE=C tr -dc 'a-z0-9' | head -c 15
+        }
+        echo $(random-string) > _RND
+        echo "Cloud Run Service Name is $_SERVICE-$(cat _RND)"
+      dir: '${_SAMPLE_DIR}'
+    
+    - id: 'Code Style'
+      name: 'node:12-slim'
+      entrypoint: '/bin/bash'
       args:
-        [
-          "compute",
-          "copy-files",
-          "./install.sh",
-          "automatoner-update-machine-$BRANCH_NAME:/home/adventure/",
-          "--zone=europe-west4-a",
-        ]
-    - name: "gcr.io/cloud-builders/gcloud"
+      - '-c'
+      - |
+        npm install
+        npm run lint
+      dir: '${_SAMPLE_DIR}'
+    
+    - id: 'Build Container Image'
+      name: 'gcr.io/cloud-builders/docker:latest'
+      args: ['build', '-t', 'gcr.io/${PROJECT_ID}/${_SERVICE}:${COMMIT_SHA}', '.']
+      dir: '${_SAMPLE_DIR}'
+    
+    - id: 'Push Container Image'
+      name: 'gcr.io/cloud-builders/docker:latest'
+      args: ['push', 'gcr.io/${PROJECT_ID}/${_SERVICE}:${COMMIT_SHA}']
+    
+    - id: Deploy to Cloud Run
+      name: 'gcr.io/cloud-builders/gcloud:$_CLOUDSDK_VERSION'
+      entrypoint: '/bin/bash'
       args:
-        [
-          "compute",
-          "ssh",
-          "--zone=europe-west4-a",
-          "adventure@automatoner-update-machine-$BRANCH_NAME",
-          "--command=bash /home/adventure/install.sh $BRANCH_NAME",
-        ]
-    - name: "gcr.io/cloud-builders/gcloud"
+      - '-c'
+      - |
+        gcloud run deploy $_SERVICE-$(cat _RND) \
+         --image gcr.io/$PROJECT_ID/$_SERVICE:$COMMIT_SHA \
+         --region $_REGION --platform managed --allow-unauthenticated
+      dir: '${_SAMPLE_DIR}'
+    
+    - id: 'Get Cloud Run URL'
+      name: 'gcr.io/cloud-builders/gcloud:$_CLOUDSDK_VERSION'
+      entrypoint: '/bin/bash'
       args:
-        [
-          "compute",
-          "instances",
-          "stop",
-          "automatoner-update-machine-$BRANCH_NAME",
-          "--zone=europe-west4-a",
-        ]
-    - name: "gcr.io/cloud-builders/gcloud"
+      - '-c'
+      - |
+        get_url() {
+            gcloud run services describe $_SERVICE-$(cat _RND) \
+              --platform managed --region ${_REGION} \
+              --format 'value(status.url)'
+        }
+        echo $(get_url) > _service_url
+        echo "Cloud Run URL for $_SERVICE-$(cat _RND) is $(cat _service_url)"
+      dir: '${_SAMPLE_DIR}'
+    
+    - id: 'Integration Tests'
+      name: 'node:12-slim'
+      entrypoint: '/bin/bash'
       args:
-        [
-          "compute",
-          "--project=automatonerv0-220316",
-          "images",
-          "create",
-          "automatoner-image-$BRANCH_NAME-$SHORT_SHA",
-          "--family=automatoner-current-image-$BRANCH_NAME",
-          "--source-disk=automatoner-update-machine-$BRANCH_NAME",
-          "--source-disk-zone=europe-west4-a",
-        ]
-    - name: "gcr.io/cloud-builders/gcloud"
+      - '-c'
+      - |
+        SERVICE_URL=$(cat _service_url) npm test
+      dir: '${_SAMPLE_DIR}'
+    
+    - id: 'Teardown'
+      name: 'gcr.io/cloud-builders/gcloud:$_CLOUDSDK_VERSION'
+      entrypoint: '/bin/bash'
       args:
-        [
-          "compute",
-          "instances",
-          "delete",
-          "automatoner-update-machine-$BRANCH_NAME",
-          "--zone=europe-west4-a",
-          "-q",
-        ]
-    - name: "gcr.io/cloud-builders/gcloud"
-      entrypoint: "bash"
-      args:
-        - "-c"
-        - |
-          gcloud compute instances delete $(gcloud compute instances list --filter=automatoner-group-v0 --uri)
+      - '-c'
+      - |
+        set -x
+        gcloud --quiet container images delete gcr.io/${PROJECT_ID}/${_SERVICE}:${COMMIT_SHA}
+        gcloud --quiet run services delete $_SERVICE-$(cat _RND) --region ${_REGION} --platform managed
+        set +x
+        echo "View build details in the console: https://console.cloud.google.com/cloud-build/builds/${BUILD_ID}"
+      dir: '${_SAMPLE_DIR}'
+    
+    substitutions:
+      _CLOUDSDK_VERSION: latest
+      _REGION: us-central1
+      _SERVICE: nodejs-cloud-run-hello-world
+      _SAMPLE_DIR: nodejs/nodejs-cloud-run-hello-world
