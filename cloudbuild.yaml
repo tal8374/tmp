@@ -6,6 +6,6 @@ steps:
       args: ['build', '-t', 'tmpproject', '.']
 
     - name: 'gcr.io/cloud-builders/docker'
-      args: ['run', '-p', '3000:3000', 'tmpproject']
+      args: ['run', '-d', '-p', '3000:3000', 'tmpproject']
 
 timeout: '220s'
