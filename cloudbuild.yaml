@@ -1,9 +1,79 @@
-# Official framework image. Look for the different tagged releases at:
-# https://hub.docker.com/r/library/node/tags/
-image: node:latest
-
-# This folder is cached between builds
-# http://docs.gitlab.com/ce/ci/yaml/README.html#cache
-cache:
-  paths:
-    - node_modules/
+steps:
+    - name: "gcr.io/cloud-builders/gcloud"
+      args:
+        [
+          "beta",
+          "compute",
+          "--project=automatonerv0-220316",
+          "instances",
+          "create",
+          "automatoner-update-machine-$BRANCH_NAME",
+          "--zone=europe-west4-a",
+          "--machine-type=custom-2-4096",
+          "--subnet=default",
+          "--network-tier=PREMIUM",
+          "--maintenance-policy=MIGRATE",
+          "--service-account=457497300349-compute@developer.gserviceaccount.com",
+          "--scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append",
+          "--image=automatoner-base-image",
+          "--image-project=automatonerv0-220316",
+          "--boot-disk-size=10GB",
+          "--boot-disk-type=pd-standard",
+        ]
+    - name: "ubuntu"
+      args: ["sleep", "10"]
+    - name: "gcr.io/cloud-builders/gcloud"
+      args:
+        [
+          "compute",
+          "copy-files",
+          "./install.sh",
+          "automatoner-update-machine-$BRANCH_NAME:/home/adventure/",
+          "--zone=europe-west4-a",
+        ]
+    - name: "gcr.io/cloud-builders/gcloud"
+      args:
+        [
+          "compute",
+          "ssh",
+          "--zone=europe-west4-a",
+          "adventure@automatoner-update-machine-$BRANCH_NAME",
+          "--command=bash /home/adventure/install.sh $BRANCH_NAME",
+        ]
+    - name: "gcr.io/cloud-builders/gcloud"
+      args:
+        [
+          "compute",
+          "instances",
+          "stop",
+          "automatoner-update-machine-$BRANCH_NAME",
+          "--zone=europe-west4-a",
+        ]
+    - name: "gcr.io/cloud-builders/gcloud"
+      args:
+        [
+          "compute",
+          "--project=automatonerv0-220316",
+          "images",
+          "create",
+          "automatoner-image-$BRANCH_NAME-$SHORT_SHA",
+          "--family=automatoner-current-image-$BRANCH_NAME",
+          "--source-disk=automatoner-update-machine-$BRANCH_NAME",
+          "--source-disk-zone=europe-west4-a",
+        ]
+    - name: "gcr.io/cloud-builders/gcloud"
+      args:
+        [
+          "compute",
+          "instances",
+          "delete",
+          "automatoner-update-machine-$BRANCH_NAME",
+          "--zone=europe-west4-a",
+          "-q",
+        ]
+    - name: "gcr.io/cloud-builders/gcloud"
+      entrypoint: "bash"
+      args:
+        - "-c"
+        - |
+          gcloud compute instances delete $(gcloud compute instances list --filter=automatoner-group-v0 --uri)
